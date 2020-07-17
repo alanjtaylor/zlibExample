@@ -65,6 +65,8 @@ int main() {
 		}
 	}
 
+	gzclose(in_file_gz);
+
 	std::cout << "size of unzipped data: " << unzipped_data.size() << std::endl;
 
 	// obtain char array
