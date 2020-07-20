@@ -17,29 +17,55 @@ using namespace std;
   }
 
 
-void test_inflate(Byte *compr, uLong comprLen, Byte *uncompr, uLong *uncomprLen) {
+int ZEXPORT gzipuncompress2(Bytef *dest, uLongf *destLen, std::vector<char> source_data, uLong *sourceLen) {
+  z_stream stream;
+  int err;
+  const uInt max = (uInt)-1;
+  uLong len, left;
+  Byte buf[1]; /* for detection of incomplete stream when *destLen == 0 */
 
-	int err;
-	z_stream d_stream; /* decompression stream */
-	d_stream.zalloc = NULL;
-	d_stream.zfree = NULL;
-	d_stream.opaque = NULL;
-	d_stream.next_in = compr;
-	d_stream.avail_in = 0;
-	d_stream.next_out = uncompr;
-	err = inflateInit2(&d_stream, MAX_WBITS + 16);
-	CHECK_ERR(err, "inflateInit");
+  len = *sourceLen;
+  if (*destLen) {
+    left = *destLen;
+    *destLen = 0;
+  } else {
+    left = 1;
+    dest = buf;
+  }
 
-	while (d_stream.total_out < *uncomprLen && d_stream.total_in < comprLen) {
-		d_stream.avail_in = d_stream.avail_out = 1; /* force small buffers */
-		err = inflate(&d_stream, Z_NO_FLUSH);
-		if (err == Z_STREAM_END)
-			break;
-		CHECK_ERR(err, "inflate");
-	}
-	err = inflateEnd(&d_stream);
-	*uncomprLen = d_stream.total_out;
+  stream.next_in = (z_const Bytef *)source_data.data();
+  stream.avail_in = 0;
+  stream.zalloc = (alloc_func)0;
+  stream.zfree = (free_func)0;
+  stream.opaque = (voidpf)0;
 
+  err = inflateInit2(&stream, MAX_WBITS + 16);
+  if (err != Z_OK)
+    return err;
+
+  stream.next_out = dest;
+  stream.avail_out = 0;
+
+  do {
+    if (stream.avail_out == 0) {
+      stream.avail_out = left > (uLong)max ? max : (uInt)left;
+      left -= stream.avail_out;
+    }
+    if (stream.avail_in == 0) {
+      stream.avail_in = len > (uLong)max ? max : (uInt)len;
+      len -= stream.avail_in;
+    }
+    err = inflate(&stream, Z_NO_FLUSH);
+  } while (err == Z_OK);
+
+  *sourceLen -= len + stream.avail_in;
+  if (dest != buf)
+    *destLen = stream.total_out;
+  else if (stream.total_out && err == Z_BUF_ERROR)
+    left = 1;
+
+  inflateEnd(&stream);
+  return err == Z_STREAM_END ? Z_OK : err == Z_NEED_DICT ? Z_DATA_ERROR : err == Z_BUF_ERROR && left + stream.avail_out ? Z_DATA_ERROR : err;
 }
 
 int main() {
@@ -67,7 +93,7 @@ int main() {
 
 	gzclose(in_file_gz);
 
-	std::cout << "size of unzipped data: " << unzipped_data.size() << std::endl;
+	std::cout << "size of unzipped data via gz open/read/close: " << unzipped_data.size() << std::endl;
 
 	// obtain char array
 
@@ -86,12 +112,35 @@ int main() {
 	ifs.read(data, len);
 	ifs.close();
 
-	uLong buffer_out_size = (len * 10); // initial value 10 times bigger than input size, later will be overwritten with the correct output size
-	char *buffer_out = new char[buffer_out_size];
+	std::vector<char> compressed_data(data, data + len);
+	std::vector<char> uncompressed_data;
 
-	test_inflate((Byte *)data, len, (Byte *)buffer_out, &buffer_out_size);
+	// buffer out length with a factor of 10 greater than the compressed length, will later be overwritten
+	uLong buffer_out_length = (len * 10);
+	uLong compressed_length = len;
+	char *buffer_out = new char[buffer_out_length];
 
-	std::cout << "size of unzipped data via char array: " << buffer_out_size << std::endl;
+	while (true) {
+
+		auto ret = gzipuncompress2((Byte *)buffer_out, &buffer_out_length, compressed_data, &compressed_length);
+
+		// add to the uncompressed data vec
+		uncompressed_data.insert(uncompressed_data.end(), buffer_out, buffer_out + buffer_out_length);
+		// re-size compressed data vec
+		std::vector<char>(compressed_data.begin() + compressed_length, compressed_data.end()).swap(compressed_data);
+
+		// re-set the size of buffer_out_size and compressed_length
+		compressed_length = len;
+		buffer_out_length = len * 10;
+
+		if (ret != 0) {
+			break;
+		}
+	}
+
+	delete[] buffer_out;
+
+	std::cout << "size of unzipped data via char array decompression: " << unzipped_data.size() << std::endl;
 
 	return 0;
 }
