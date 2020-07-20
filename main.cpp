@@ -140,7 +140,7 @@ int main() {
 
 	delete[] buffer_out;
 
-	std::cout << "size of unzipped data via char array decompression: " << unzipped_data.size() << std::endl;
+	std::cout << "size of unzipped data via char array decompression: " << uncompressed_data.size() << std::endl;
 
 	return 0;
 }
