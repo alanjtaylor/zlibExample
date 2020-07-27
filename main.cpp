@@ -18,54 +18,63 @@ using namespace std;
 
 
 int ZEXPORT gzipuncompress2(Bytef *dest, uLongf *destLen, std::vector<char> source_data, uLong *sourceLen) {
-  z_stream stream;
-  int err;
-  const uInt max = (uInt)-1;
-  uLong len, left;
-  Byte buf[1]; /* for detection of incomplete stream when *destLen == 0 */
+	z_stream stream;
+	int err;
+	const uInt max = (uInt) - 1;
+	uLong len, left;
+	Byte buf[1]; /* for detection of incomplete stream when *destLen == 0 */
 
-  len = *sourceLen;
-  if (*destLen) {
-    left = *destLen;
-    *destLen = 0;
-  } else {
-    left = 1;
-    dest = buf;
-  }
+	uLong initial_guess = *destLen;
 
-  stream.next_in = (z_const Bytef *)source_data.data();
-  stream.avail_in = 0;
-  stream.zalloc = (alloc_func)0;
-  stream.zfree = (free_func)0;
-  stream.opaque = (voidpf)0;
+	len = *sourceLen;
+	if (*destLen) {
+		left = *destLen;
+		*destLen = 0;
+	} else {
+		left = 1;
+		dest = buf;
+	}
 
-  err = inflateInit2(&stream, MAX_WBITS + 16);
-  if (err != Z_OK)
-    return err;
+	stream.next_in = (z_const Bytef *)source_data.data();
+	stream.avail_in = 0;
+	stream.zalloc = (alloc_func)0;
+	stream.zfree = (free_func)0;
+	stream.opaque = (voidpf)0;
 
-  stream.next_out = dest;
-  stream.avail_out = 0;
+	err = inflateInit2(&stream, MAX_WBITS + 16);
+	if (err != Z_OK)
+		return err;
 
-  do {
-    if (stream.avail_out == 0) {
-      stream.avail_out = left > (uLong)max ? max : (uInt)left;
-      left -= stream.avail_out;
-    }
-    if (stream.avail_in == 0) {
-      stream.avail_in = len > (uLong)max ? max : (uInt)len;
-      len -= stream.avail_in;
-    }
-    err = inflate(&stream, Z_NO_FLUSH);
-  } while (err == Z_OK);
+	stream.next_out = dest;
+	stream.avail_out = 0;
 
-  *sourceLen -= len + stream.avail_in;
-  if (dest != buf)
-    *destLen = stream.total_out;
-  else if (stream.total_out && err == Z_BUF_ERROR)
-    left = 1;
+	do {
+		stream.next_out = dest;
+		if (stream.avail_out == 0) {
+			stream.avail_out = left > (uLong)max ? max : (uInt)left;
+			left -= stream.avail_out;
+		}
+		if (stream.avail_in == 0) {
+			stream.avail_in = len > (uLong)max ? max : (uInt)len;
+			len -= stream.avail_in;
+		}
+		err = inflate(&stream, Z_NO_FLUSH);
 
-  inflateEnd(&stream);
-  return err == Z_STREAM_END ? Z_OK : err == Z_NEED_DICT ? Z_DATA_ERROR : err == Z_BUF_ERROR && left + stream.avail_out ? Z_DATA_ERROR : err;
+		if (stream.avail_in != 0 && stream.avail_out == 0) {
+			left = initial_guess;
+			stream.avail_in -= left;
+		}
+
+	} while (err == Z_OK);
+
+	*sourceLen = stream.total_in;
+	if (dest != buf)
+		*destLen = stream.total_out;
+	else if (stream.total_out && err == Z_BUF_ERROR)
+		left = 1;
+
+	inflateEnd(&stream);
+	return err == Z_STREAM_END ? Z_OK : err == Z_NEED_DICT ? Z_DATA_ERROR : err == Z_BUF_ERROR && left + stream.avail_out ? Z_DATA_ERROR : err;
 }
 
 int main() {
@@ -115,14 +124,17 @@ int main() {
 	std::vector<char> compressed_data(data, data + len);
 	std::vector<char> uncompressed_data;
 
-	// buffer out length with a factor of 10 greater than the compressed length, will later be overwritten
-	uLong buffer_out_length = (len * 10);
+	// buffer out length with a factor of 10 less than the compressed length to test if the buffer expands
+	uLong buffer_out_length = (len / 10);
 	uLong compressed_length = len;
 	char *buffer_out = new char[buffer_out_length];
 
 	while (true) {
 
 		auto ret = gzipuncompress2((Byte *)buffer_out, &buffer_out_length, compressed_data, &compressed_length);
+
+		std::cout << "size of buffer out length: " << buffer_out_length << std::endl;
+		std::cout << "compressed_length: " << compressed_length << std::endl;
 
 		// add to the uncompressed data vec
 		uncompressed_data.insert(uncompressed_data.end(), buffer_out, buffer_out + buffer_out_length);
@@ -131,7 +143,7 @@ int main() {
 
 		// re-set the size of buffer_out_size and compressed_length
 		compressed_length = len;
-		buffer_out_length = len * 10;
+		buffer_out_length = len / 10;
 
 		if (ret != 0) {
 			break;
@@ -140,7 +152,12 @@ int main() {
 
 	delete[] buffer_out;
 
-	std::cout << "size of unzipped data via char array decompression: " << uncompressed_data.size() << std::endl;
+	// check if the vectors are equal
+	if (unzipped_data == uncompressed_data) {
+		std::cout << "equal vectors" << std::endl;
+	} else {
+		std::cout << "vectors not equal" << std::endl; 
+	}
 
 	return 0;
 }
