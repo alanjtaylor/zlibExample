@@ -16,65 +16,76 @@ using namespace std;
     }                                              \
   }
 
+int ZEXPORT gzipuncompress2(Bytef *dest, uLongf *destLen, std::vector<char> source_data, uLong *sourceLen, std::vector<char> &destination_data) {
+  z_stream stream;
+  int err;
+  const uInt max = (uInt)-1;
+  uLong len, left;
+  Byte buf[1]; /* for detection of incomplete stream when *destLen == 0 */
 
-int ZEXPORT gzipuncompress2(Bytef *dest, uLongf *destLen, std::vector<char> source_data, uLong *sourceLen) {
-	z_stream stream;
-	int err;
-	const uInt max = (uInt) - 1;
-	uLong len, left;
-	Byte buf[1]; /* for detection of incomplete stream when *destLen == 0 */
+  uLong initial_guess = *destLen;
 
-	uLong initial_guess = *destLen;
+  len = *sourceLen;
+  if (*destLen) {
+    left = *destLen;
+    *destLen = 0;
+  } else {
+    left = 1;
+    dest = buf;
+  }
 
-	len = *sourceLen;
-	if (*destLen) {
-		left = *destLen;
-		*destLen = 0;
-	} else {
-		left = 1;
-		dest = buf;
-	}
+  stream.next_in = (z_const Bytef *)source_data.data();
+  stream.avail_in = 0;
+  stream.zalloc = (alloc_func)0;
+  stream.zfree = (free_func)0;
+  stream.opaque = (voidpf)0;
 
-	stream.next_in = (z_const Bytef *)source_data.data();
-	stream.avail_in = 0;
-	stream.zalloc = (alloc_func)0;
-	stream.zfree = (free_func)0;
-	stream.opaque = (voidpf)0;
+  err = inflateInit2(&stream, MAX_WBITS + 16);
+  if (err != Z_OK)
+    return err;
 
-	err = inflateInit2(&stream, MAX_WBITS + 16);
-	if (err != Z_OK)
-		return err;
+  stream.next_out = dest;
+  stream.avail_out = 0;
 
-	stream.next_out = dest;
-	stream.avail_out = 0;
+  int counter = 0;
 
-	do {
-		stream.next_out = dest;
-		if (stream.avail_out == 0) {
-			stream.avail_out = left > (uLong)max ? max : (uInt)left;
-			left -= stream.avail_out;
-		}
-		if (stream.avail_in == 0) {
-			stream.avail_in = len > (uLong)max ? max : (uInt)len;
-			len -= stream.avail_in;
-		}
-		err = inflate(&stream, Z_NO_FLUSH);
+  do {
 
-		if (stream.avail_in != 0 && stream.avail_out == 0) {
-			left = initial_guess;
-			stream.avail_in -= left;
-		}
+    if (counter != 0) {
+      destination_data.insert(destination_data.end(), dest, dest + initial_guess);
+    }
 
-	} while (err == Z_OK);
+    if (stream.avail_out == 0) {
+      stream.avail_out = left > (uLong)max ? max : (uInt)left;
+      left -= stream.avail_out;
+    }
+    if (stream.avail_in == 0) {
+      stream.avail_in = len > (uLong)max ? max : (uInt)len;
+      len -= stream.avail_in;
+    }
+    err = inflate(&stream, Z_NO_FLUSH);
 
-	*sourceLen = stream.total_in;
-	if (dest != buf)
-		*destLen = stream.total_out;
-	else if (stream.total_out && err == Z_BUF_ERROR)
-		left = 1;
+    if (stream.avail_in != 0 && stream.avail_out == 0) {
+      left = initial_guess;
+      stream.avail_in -= left;
+    }
 
-	inflateEnd(&stream);
-	return err == Z_STREAM_END ? Z_OK : err == Z_NEED_DICT ? Z_DATA_ERROR : err == Z_BUF_ERROR && left + stream.avail_out ? Z_DATA_ERROR : err;
+    stream.next_out = dest;
+
+    counter++;
+  } while (err == Z_OK);
+
+  destination_data.insert(destination_data.end(), dest, dest + initial_guess - stream.avail_out);
+
+  *sourceLen = stream.total_in;
+  if (dest != buf)
+    *destLen = stream.total_out;
+  else if (stream.total_out && err == Z_BUF_ERROR)
+    left = 1;
+
+  inflateEnd(&stream);
+
+  return err == Z_STREAM_END ? Z_OK : err == Z_NEED_DICT ? Z_DATA_ERROR : err == Z_BUF_ERROR && left + stream.avail_out ? Z_DATA_ERROR : err;
 }
 
 int main() {
@@ -131,13 +142,10 @@ int main() {
 
 	while (true) {
 
-		auto ret = gzipuncompress2((Byte *)buffer_out, &buffer_out_length, compressed_data, &compressed_length);
+		auto ret = gzipuncompress2((Byte *)buffer_out, &buffer_out_length, compressed_data, &compressed_length, uncompressed_data);
 
-		std::cout << "size of buffer out length: " << buffer_out_length << std::endl;
-		std::cout << "compressed_length: " << compressed_length << std::endl;
+		std::cout << "size of the uncompressed data: " << uncompressed_data.size() << std::endl;
 
-		// add to the uncompressed data vec
-		uncompressed_data.insert(uncompressed_data.end(), buffer_out, buffer_out + buffer_out_length);
 		// re-size compressed data vec
 		std::vector<char>(compressed_data.begin() + compressed_length, compressed_data.end()).swap(compressed_data);
 
@@ -156,7 +164,7 @@ int main() {
 	if (unzipped_data == uncompressed_data) {
 		std::cout << "equal vectors" << std::endl;
 	} else {
-		std::cout << "vectors not equal" << std::endl; 
+		std::cout << "vectors not equal" << std::endl;
 	}
 
 	return 0;
